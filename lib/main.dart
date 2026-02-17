@@ -161,7 +161,10 @@ class _HomePageState extends State<HomePage> {
         if (!mounted) return;
         if (mounted) setState(() => _busy = false);
         ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(content: Text('Already scanned for this date')),
+          const SnackBar(
+            content: Text('Already scanned for this date'),
+            duration: Duration(seconds: 1),
+          ),
         );
         return;
       }
@@ -183,7 +186,7 @@ class _HomePageState extends State<HomePage> {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(
           content: Text('Scan saved'),
-          duration: Duration(seconds: 2),
+          duration: Duration(seconds: 1),
         ),
       );
       if (mounted) setState(() => _busy = false);
@@ -240,13 +243,15 @@ class _HomePageState extends State<HomePage> {
     final code = capture.barcodes.first.rawValue;
     if (code == null || code.isEmpty) return;
 
-    _processingScan = false;
+    _processingScan = true;
 
     if (mounted && Navigator.of(context).canPop()) {
       Navigator.of(context).pop();
     }
 
     await _saveScan(code);
+
+    _processingScan = false;
   }
 
   Future<void> _openScanner() async {
@@ -261,12 +266,21 @@ class _HomePageState extends State<HomePage> {
     //     ),
     //   ),
     // );
-    await Navigator.of(context).push(
-      MaterialPageRoute(
-        builder: (_) => AiBarcodeScanner(onDetect: _handleDetect),
-      ),
-    );
-    _processingScan = false; // keep state clean after returning from scanner
+    await Navigator.of(context)
+        .push(
+          MaterialPageRoute(
+            builder: (_) => AiBarcodeScanner(
+              onDetect: _handleDetect,
+              controller: MobileScannerController(
+                detectionSpeed: DetectionSpeed.noDuplicates,
+                // formats: [BarcodeFormat.code93],
+                // detectionTimeoutMs: 1000,
+              ),
+            ),
+          ),
+        )
+        .then((_) => _processingScan = false);
+
     // _saveScan(Random().nextInt(1000000000).toString());
   }
 
@@ -390,24 +404,32 @@ class _HomePageState extends State<HomePage> {
   Future<void> _exportToExcel() async {
     try {
       if (mounted) setState(() => _busy = true);
-      final snapshot = await _firestore
-          .collection('scans')
-          .orderBy('timestamp', descending: true)
-          .get();
 
       final excel = Excel.createExcel();
       final sheet = excel['Scans'];
 
-      sheet.appendRow(['Code', 'Timestamp']);
+      sheet.appendRow(['Date', 'ITS ID', 'Timestamp']);
 
-      for (final doc in snapshot.docs) {
-        final data = doc.data();
-        final ts = data['timestamp'] as Timestamp?;
+      final datesSnapshot = await _firestore.collection('scans_by_date').get();
 
-        sheet.appendRow([
-          data['code'] ?? '',
-          ts != null ? _formatTimestamp(ts) : '',
-        ]);
+      for (final dateDoc in datesSnapshot.docs) {
+        final dateKey = dateDoc.id;
+
+        final scansSnapshot = await dateDoc.reference
+            .collection('scans')
+            .orderBy('timestamp', descending: true)
+            .get();
+
+        for (final doc in scansSnapshot.docs) {
+          final data = doc.data();
+          final ts = data['timestamp'] as Timestamp?;
+
+          sheet.appendRow([
+            dateKey,
+            data['code'] ?? '',
+            ts != null ? _formatTimestamp(ts) : '',
+          ]);
+        }
       }
 
       final dir = Directory('/storage/emulated/0/Download');
@@ -419,13 +441,15 @@ class _HomePageState extends State<HomePage> {
       }
 
       if (!mounted) return;
-      if (mounted) setState(() => _busy = false);
+      setState(() => _busy = false);
+
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Excel exported: ${file.path}')));
     } catch (e) {
       if (mounted) setState(() => _busy = false);
       if (!mounted) return;
+
       ScaffoldMessenger.of(
         context,
       ).showSnackBar(SnackBar(content: Text('Export failed: $e')));
